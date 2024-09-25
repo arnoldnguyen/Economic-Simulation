@@ -1,0 +1,401 @@
+import mesa
+import random
+from collections import defaultdict
+2
+
+import numpy as np
+import math
+from mesa import time
+import pandas as pd
+from decimal import Decimal
+import decimal
+from decimal import *
+def compute_surplus(model):
+return sum(agent.tempSurplus for agent in model.schedule.agents)
+def compute_trades(model):
+agent_trades = np.count_nonzero([agent.trade for agent in model.schedule.agents])
+return agent_trades
+def sellerUpdate(pastTrader, selfIndex, selfRound, NValLagged, selfCost, NValue, offerPrice):
+for buyer in pastTrader:
+if attractionList[buyer.index, selfIndex, selfRound] != 1:
+return
+else:
+attractionList[buyer.index, selfIndex, selfRound] = (Decimal((Decimal(pValue) * Decimal(NValLagged) * Decimal(attractionList[buyer.index, selfIndex, selfRound - 1]))) + Decimal(dValue) * ((((Decimal(buyer.offerPrice) + Decimal(offerPrice))/2) - (Decimal(selfCost)))))/(Decimal(NValue))
+
+def buyerUpdate(pastTrader, selfIndex, selfRound, NValLagged, initialvalue, NValue, offerPrice):
+for seller in pastTrader:
+if attractionList[selfIndex, seller.index, selfRound] != 1:
+return
+else:
+attractionList[selfIndex, seller.index, selfRound] = ((Decimal(Decimal(pValue) * Decimal(NValLagged) * Decimal(attractionList[selfIndex, seller.index, selfRound - 1]))) + Decimal((dValue)) * ((Decimal(initialvalue) - ((Decimal(seller.offerPrice) + Decimal(offerPrice))/2))))/(Decimal(NValue))
+
+class MarketBuyer(mesa.Agent):
+"""A buyer with fixed price for a product"""
+def __init__(self, unique_id, model):
+super().__init__(unique_id, model)
+self.lowerBound = 5
+self.upperBound = 10
+self.initialValue = np.random.uniform(self.lowerBound, self.upperBound) # initializes the buyer price
+self.surplus = 0 # this will record the agents surplus, this will be what will be added up on when the surplus is recorded
+self.trade = False # this will record if the agent has just gone through the trade
+self.selected = None
+self.startprice = self.initialValue
+self.round = 1
+self.tempSurplus = 0
+self.index = (int)(self.unique_id/2)
+self.distribution = 0
+self.sumoftopA = 0
+self.sumofbotA = 0
+self.sumoftopTable = []
+self.botFormula = 0
+self.move = 0
+self.averagePrice = None
+self.pastTraders = []
+self.NValue = 0
+self.indicator = 0
+
+3
+
+self.stored = None
+self.NValLagged = 1
+self.offerPrice = (.5*self.initialValue + .5*self.lowerBound)
+self.successes = 0
+self.fail = 0
+self.id = self
+def step(self):
+self.tempSurplus = 0
+self.sumoftopTable = []
+self.botFormula = 0
+self.distribution = []
+self.averagePrice = None
+self.roundLagged = self.round - 1
+if (self.move != 0):
+self.trade = False
+for value in (connectionListB[self.unique_id]): # table with sum of trades PER each seller
+self.sumoftopTable.append(attractionList[self.index][value.index][self.round - 1])
+for topA in self.sumoftopTable: # table with bottom equation done so it’s plug & chug
+topA = round(topA,8)
+self.botFormula += (Decimal(2.718)**(Decimal(lamValue)*Decimal(topA)))
+for topA in self.sumoftopTable:
+preventNan = Decimal(2.718)**(Decimal(lamValue)*Decimal(topA))/(Decimal(self.botFormula))
+if math.isnan(preventNan) == True:
+preventNan = 1
+self.distribution.append(float(preventNan)) # this is the equation we all know and love"""
+# and this is the probability weighted choice
+other_seller = (self.random.choices(connectionListB[self.unique_id], weights=self.distribution, k=1))
+self.selected = other_seller[0]
+self.NValLagged = self.NValue
+self.NValue = pValue * (1-kapValue) * self.NValLagged + 1
+if (other_seller[0].selected != None):
+if (self.trade == False and other_seller[0].trade == False):
+if (other_seller[0].selected.unique_id == self.unique_id):
+if (self.offerPrice > other_seller[0].offerPrice):
+self.successes+=1
+self.stored = other_seller[0]
+if (other_seller[0] not in self.pastTraders):
+self.pastTraders.append(other_seller[0])
+other_seller[0].pastTraders.append(self.id)
+if (other_seller[0] is self.stored):
+self.indicator = 1
+else:
+self.indicator = 0
+self.averagePrice = (self.offerPrice + other_seller[0].offerPrice)/2
+self.surplus += (self.initialValue - self.averagePrice)
+other_seller[0].tempSurplus = (self.averagePrice - other_seller[0].Cost)
+self.tempSurplus = (self.initialValue - self.averagePrice)
+other_seller[0].surplus += (self.averagePrice - other_seller[0].Cost)
+round(self.tempSurplus,5)
+self.trade = True
+other_seller[0].trade = True
+attractionList[self.index, other_seller[0].index, self.round] = Decimal(Decimal(pValue * self.NValLagged) * Decimal(attractionList[self.index, other_seller[0].index, self.round - 1])) + (Decimal(dValue + (1-dValue)*self.indicator) * Decimal(self.tempSurplus))/Decimal(self.NValue)
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.lowerBound
+round(self.offerPrice,5)
+other_seller[0].successes+=1
+other_seller[0].offerPrice = (1-gammaValue)*other_seller[0].offerPrice + gammaValue*other_seller[0].upperBound
+
+4
+
+round(other_seller[0].offerPrice,5)
+elif(other_seller[0].offerPrice - self.offerPrice < fixedCost):
+self.trade = True
+self.averagePrice = (self.offerPrice + other_seller[0].offerPrice)/2
+self.surplus += (self.initialValue - self.averagePrice)
+other_seller[0].tempSurplus = (self.averagePrice - other_seller[0].Cost)
+self.tempSurplus = (self.initialValue - self.averagePrice)
+other_seller[0].surplus += (self.averagePrice - other_seller[0].Cost)
+round(self.tempSurplus,5)
+self.trade = True
+other_seller[0].trade = True
+attractionList[self.index, other_seller[0].index, self.round] = Decimal(Decimal(pValue * self.NValLagged) * Decimal(attractionList[self.index, other_seller[0].index, self.round - 1])) + (Decimal(dValue + (1-dValue)*self.indicator) * Decimal(self.tempSurplus))/Decimal(self.NValue)
+else:
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.initialValue
+round(self.offerPrice,5)
+other_seller[0].fail+=1
+other_seller[0].offerPrice = (1-gammaValue)*other_seller[0].offerPrice + gammaValue*other_seller[0].Cost
+self.fail+=1
+if (len(self.pastTraders) > 0):
+buyerUpdate(self.pastTraders, self.index, self.round, self.NValLagged, self.initialValue, self.NValue, self.offerPrice)
+self.round+=1
+self.move+=1
+else:
+try:
+self.averagePrice = None
+self.trade = False
+self.indicator = 0
+other_seller = self.random.choice(connectionListB[self.unique_id])
+self.selected = other_seller
+self.NValLagged = self.NValue
+self.NValue = pValue * (1-kapValue) * self.NValLagged + 1
+if (other_seller.selected != None):
+if (self.trade == False and other_seller.trade == False):
+if (other_seller.selected.unique_id == self.unique_id):
+if (self.offerPrice > other_seller.offerPrice):
+self.successes+=1
+self.stored = other_seller
+self.pastTraders.append(other_seller)
+self.averagePrice = (self.offerPrice + other_seller.offerPrice)/2
+self.surplus += (self.initialValue - self.averagePrice)
+other_seller.surplus += (self.averagePrice - other_seller.Cost)
+self.tempSurplus = (self.initialValue - self.averagePrice)
+other_seller.tempSurplus = (self.averagePrice - other_seller.Cost)
+self.trade = True
+other_seller.trade = True
+attractionList[self.index, other_seller.index, self.round] = ((pValue * self.NValLagged * attractionList[self.index, other_seller.index, self.round - 1]) + (dValue * self.tempSurplus))/self.NValue
+other_seller.successes+=1
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.lowerBound
+round(self.offerPrice,5)
+other_seller.offerPrice = (1-gammaValue)*other_seller.offerPrice + gammaValue*self.upperBound
+else:
+self.offerPrice = (1-gammaValue) *self.offerPrice + gammaValue*self.initialValue
+round(self.offerPrice,5)
+round(self.offerPrice,5)
+other_seller.offerPrice = (1-gammaValue)*other_seller.offerPrice + gammaValue*other_seller.Cost
+
+self.round+=1
+
+5
+
+self.move+=1
+except IndexError:
+pass
+def advance(self):
+pass
+
+class MarketSeller(mesa.Agent):
+"""A seller with a price for a product."""
+def __init__(self, unique_id, model):
+super().__init__(unique_id, model)
+self.lowerBound = 0
+self.upperBound = 15
+self.Cost = np.random.uniform(self.lowerBound, self.upperBound) ## defines the price of the product
+self.surplus = 0 ## records the surplus of the agent
+self.startprice = self.Cost
+self.trade = False
+self.selected = None
+self.tempSurplus = 0
+self.round = 1
+self.index = (int) (self.unique_id / 2)
+self.distribution = []
+self.botFormula = 0
+self.sumoftopTable = []
+self.botFormula = 0
+self.move = 0
+self.averagePrice = None
+self.NValue = 0
+self.pastTraders = []
+self.indicator = 0
+self.NValLagged = 1
+self.stored = None
+self.offerPrice = (.5*self.Cost + .5*self.upperBound)
+self.successes = 0
+self.fail = 0
+self.id = self
+def step(self):
+Decimal(self.offerPrice)
+self.tempSurplus = 0
+self.botFormula = 0
+self.distribution = []
+self.averagePrice = None
+self.sumoftopTable = []
+self.summation = np.sum(attractionList, axis = 2)
+if (self.move != 0):
+self.trade = False
+for value in (connectionListS[self.unique_id]):
+self.sumoftopTable.append((attractionList[value.index][self.index][self.round - 1])) ## table with sum of trades PER each buyer
+for topA in self.sumoftopTable:
+topA = round(topA,8)
+self.botFormula += ((Decimal(2.718)**(Decimal(lamValue)*Decimal(topA)))) ## table with bottom equation done so it’s plug & chug
+for topA in self.sumoftopTable:
+preventNan = Decimal(2.718)**(Decimal(lamValue)*Decimal(topA))/(Decimal(self.botFormula))
+if math.isnan(preventNan) == True:
+preventNan = 1
+self.distribution.append(float(preventNan)) ## this is the equation we all know and love
+other_buyer = self.random.choices(connectionListS[self.unique_id], weights=self.distribution, k=1) ## and this is the probability weighted choic
+self.selected = other_buyer[0]
+self.NValLagged = self.NValue
+self.NValue = (pValue * (1-kapValue) * self.NValLagged) + 1
+if (other_buyer[0].selected != None):
+if (self.trade == False and other_buyer[0].trade == False):
+if (other_buyer[0].selected.unique_id == self.unique_id):
+if (other_buyer[0].offerPrice > self.offerPrice):
+self.successes+=1
+self.stored = other_buyer[0]
+if (other_buyer[0] not in self.pastTraders):
+self.pastTraders.append(other_buyer[0])
+other_buyer[0].pastTraders.append(self.id)
+if other_buyer[0] == self.stored:
+self.indicator = 1
+else:
+self.indicator = 0
+self.trade = True
+other_buyer[0].trade = True
+self.averagePrice = (other_buyer[0].offerPrice + self.offerPrice)/2
+self.surplus += (self.averagePrice - self.Cost)
+self.tempSurplus = (self.averagePrice - self.Cost)
+other_buyer[0].tempSurplus = (other_buyer[0].initialValue - self.averagePrice)
+other_buyer[0].surplus += (other_buyer[0].initialValue - self.averagePrice)
+attractionList[other_buyer[0].index, self.index, self.round] = ((Decimal(pValue) * Decimal(self.NValLagged) * Decimal(attractionList[other_buyer[0].index, self.index, self.round - 1])) + (((Decimal(dValue) + (1-Decimal(dValue))*Decimal(self.indicator))) * Decimal(self.tempSurplus)))/(Decimal(self.NValue))
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.upperBound
+round(self.offerPrice,5)
+other_buyer[0].offerPrice = (1-gammaValue)*other_buyer[0].offerPrice + gammaValue*other_buyer[0].lowerBound
+round(other_buyer[0].offerPrice,5)
+elif(self.offerPrice - other_buyer[0].offerPrice < fixedCost):
+self.trade = True
+self.averagePrice = (other_buyer[0].offerPrice + self.offerPrice)/2
+self.surplus += (self.averagePrice - self.Cost)
+self.tempSurplus = (self.averagePrice - self.Cost)
+other_buyer[0].tempSurplus = (other_buyer[0].initialValue - self.averagePrice)
+other_buyer[0].surplus += (other_buyer[0].initialValue - self.averagePrice)
+attractionList[other_buyer[0].index, self.index, self.round] = ((Decimal(pValue) * Decimal(self.NValLagged) * Decimal(attractionList[other_buyer[0].index, self.index, self.round - 1])) + (((Decimal(dValue) + (1-Decimal(dValue))*Decimal(self.indicator))) * Decimal(self.tempSurplus)))/(Decimal(self.NValue))
+round(self.offerPrice,5)
+else:
+self.fail+=1
+other_buyer[0].fail+=1
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.Cost
+other_buyer[0].offerPrice = other_buyer[0].offerPrice * (1-gammaValue) + gammaValue*other_buyer[0].initialValue
+
+if (len(self.pastTraders) > 0):
+sellerUpdate(self.pastTraders, self.index, self.round, self.NValLagged, self.Cost, self.NValue, self.offerPrice)
+self.round+=1
+self.move+=1
+else:
+try:
+self.averagePrice = None
+self.trade = False
+other_buyer = self.random.choice(connectionListS[self.unique_id])
+self.selected = other_buyer
+self.NValue = pValue * (1-kapValue) * self.NValLagged + 1
+if (other_buyer.selected != None):
+
+7
+
+if (self.trade == False and other_buyer.trade == False):
+if (other_buyer.selected.unique_id == self.unique_id):
+if (other_buyer.offerPrice > self.offerPrice):
+self.successes+=1
+self.stored = other_buyer
+self.averagePrice = (other_buyer.offerPrice + self.offerPrice)/2
+self.surplus += (self.averagePrice - self.Cost)
+other_buyer.surplus += (other_buyer.initialValue - self.averagePrice)
+self.tempSurplus += (self.averagePrice - self.Cost)
+other_buyer.tempSurplus += (other_buyer.initialValue - self.averagePrice)
+self.trade = True
+attractionList[other_buyer.index, self.index, self.round] = ((pValue * self.NValLagged * attractionList[other_buyer.index, self.index, self.round - 1]) + (dValue * self.tempSurplus))/self.NValue
+self.pastTraders.append(other_buyer)
+self.offerPrice = (1-gammaValue)*self.offerPrice + gammaValue*self.lowerBound
+round(self.offerPrice,5)
+other_buyer.successes+=1
+other_buyer.offerPrice = (1-gammaValue)*other_buyer.offerPrice + gammaValue*other_buyer.lowerBound
+round(other_buyer.offerPrice,5)
+else:
+self.fail+=1
+other_buyer.fail+=1
+self.offerPrice = self.offerPrice * (1 - gammaValue) + self.Cost*gammaValue
+other_buyer.offerPrice = (1-gammaValue)*other_buyer.offerPrice + other_buyer.initialValue*gammaValue
+
+self.round+=1
+self.move+=1
+except IndexError:
+pass
+def advance(self):
+pass
+class MarketModelThree(mesa.Model): ## new and improved :))!
+"""A model with some number of agents."""
+global valueSurplus
+global connectionListB
+global percentage_chance
+global sellerIndices
+global tradeList
+global buyerIndices
+global lambdaVal
+global connectionListS
+global surplusList
+global lamValue
+global kapValue
+global dValue
+global pValue
+global gammaValue
+global roundnum
+global fixedCost
+sellerIndices = []
+connectionListB = {}
+percentage_chance = 1
+connectionListS = {}
+buyerIndices = []
+surplusList = []
+kapValue = 1
+
+8
+
+lamValue = .1
+gammaValue = 0.05
+dValue = 0
+pValue = 1
+roundnum = 0
+fixedCost = 0.40
+getcontext().prec = 6
+getcontext().Emax = 9999
+def __init__(self, B, S, seed):
+super().__init__(seed=seed)
+self.num_buyers = B
+self.num_sellers = S
+self.num_agents = (B + S)
+self.schedule = mesa.time.SimultaneousActivation(self)
+global attractionList
+attractionList = np.ones((30,30,2003), dtype=np.float64)
+for i in range(self.num_agents * 2):
+if (i % 2 == 0 and self.num_buyers > 0):
+a = MarketBuyer(i, self) ## in this code, split the agents into two groups, buyers or sellers for their roles.
+self.schedule.add(a)
+buyerIndices.append(a)
+connectionListB[a.unique_id] = []
+self.num_buyers -= 1
+elif self.num_sellers > 0:
+b = MarketSeller(i, self)
+self.schedule.add(b)
+sellerIndices.append(b)
+connectionListS[b.unique_id] = []
+self.num_sellers -= 1
+for key in connectionListB:
+for j in sellerIndices:
+if random.random() < percentage_chance:
+connectionListB[key].append(j)
+
+for key in connectionListS:
+for j in buyerIndices:
+if random.random() < percentage_chance:
+connectionListS[key].append(j)
+self.datacollector = DataCollector(
+model_reporters={"compute_surplus": compute_surplus, "compute_trades": compute_trades}, agent_reporters={"averagePrice": "averagePrice","startprice": "startprice", "selected": "selected", "id": "id", "offerPrice": "offerPrice"}
+)
+self.running = True
+self.datacollector.collect(self)
+def step(self):
+global roundnum
+"""Advance the model by one step."""
+for agent in self.schedule.agents:
+agent.selected = None
+self.schedule.step()
+self.datacollector.collect(self)
+roundnum+=1
+print("roundnum" +str(roundnum))
