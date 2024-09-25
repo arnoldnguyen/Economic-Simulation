@@ -1,0 +1,796 @@
+import random
+import numpy as np
+import math
+import pandas as pd
+from decimal import Decimal, getcontext
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
+
+getcontext().prec = 6
+getcontext().Emax = 9999
+
+# Base Agent class
+class Agent:
+    def __init__(self, unique_id, model):
+        self.unique_id = unique_id
+        self.model = model
+
+# Scheduler class
+class SimultaneousActivation:
+    def __init__(self, model):
+        self.model = model
+        self.agents = []
+
+    def add(self, agent):
+        self.agents.append(agent)
+
+    def step(self):
+        # Agents perform their steps
+        for agent in self.agents:
+            agent.step()
+        # Agents advance to next state
+        for agent in self.agents:
+            agent.advance()
+
+# Base MarketAgent class
+class MarketAgent(Agent):
+    def __init__(self, unique_id, model):
+        super().__init__(unique_id, model)
+        self.trade = False
+        self.selected = None
+        self.tempSurplus = 0
+        self.round = 1
+        self.index = self.unique_id
+        self.move = 0
+        self.averagePrice = None
+        self.NValue = 0
+        self.NValLagged = 1
+        self.successes = 0
+        self.failures = 0
+        self.pastTraders = []
+        self.indicator = 0
+
+    def update_attraction(self, other_agent, surplus):
+        idx_self = self.unique_id
+        idx_other = other_agent.unique_id
+        round_current = self.round
+        NValLagged = self.NValLagged
+        NValue = self.NValue
+        pValue = self.model.pValue
+        dValue = self.model.dValue
+
+        attraction_prev = self.model.attractionList[idx_self, idx_other, round_current - 1]
+        indicator = 1 if surplus > 0 else 0
+        self.model.attractionList[idx_self, idx_other, round_current] = (
+            pValue * NValLagged * attraction_prev + (dValue + (1 - dValue) * indicator) * surplus
+        ) / NValue
+
+    def select_partner(self, connection_list, attraction_matrix):
+        if self.move == 0 or len(connection_list[self.unique_id]) == 0:
+            # First move: random selection or no available partners
+            return random.choice(connection_list[self.unique_id]) if connection_list[self.unique_id] else None
+        # Calculate probabilities based on attraction values
+        attractions = [
+            attraction_matrix[self.unique_id][agent.unique_id][self.round - 1]
+            for agent in connection_list[self.unique_id]
+        ]
+        exp_values = np.exp(self.model.lamValue * np.array(attractions))
+        probabilities = exp_values / np.sum(exp_values)
+        return random.choices(connection_list[self.unique_id], weights=probabilities, k=1)[0]
+
+    def update_offer_price(self, success, target_price):
+        gamma = self.model.gammaValue
+        if success:
+            self.offerPrice = (1 - gamma) * self.offerPrice + gamma * target_price
+        else:
+            self.offerPrice = (1 - gamma) * self.offerPrice + gamma * self.initial_price
+
+# MarketBuyer class
+class MarketBuyer(MarketAgent):
+    """A buyer with a fixed price for a product"""
+
+    def __init__(self, unique_id, model):
+        super().__init__(unique_id, model)
+        lb = model.buyer_lower_bound
+        ub = model.buyer_upper_bound
+        self.initial_price = np.random.uniform(lb, ub)
+        self.surplus = 0
+        self.offerPrice = 0.5 * self.initial_price + 0.5 * lb
+        self.lowerBound = lb
+
+    def step(self):
+        self.tempSurplus = 0
+        self.trade = False
+        other_seller = self.select_partner(self.model.connectionListB, self.model.attractionList)
+        if other_seller is None:
+            return  # No available partners
+        self.selected = other_seller
+        self.NValLagged = self.NValue
+        self.NValue = self.model.pValue * (1 - self.model.kapValue) * self.NValLagged + 1
+
+        if other_seller.selected is not None and not self.trade and not other_seller.trade:
+            if other_seller.selected.unique_id == self.unique_id:
+                self.attempt_trade(other_seller)
+
+        if self.pastTraders:
+            self.update_attraction(other_seller, self.tempSurplus)
+
+        self.round += 1
+        self.move += 1
+
+    def attempt_trade(self, other_seller):
+        if self.offerPrice >= other_seller.offerPrice or other_seller.offerPrice - self.offerPrice < self.model.fixedCost:
+            self.successes += 1
+            self.indicator = 1
+            self.trade = True
+            other_seller.trade = True
+            self.averagePrice = (self.offerPrice + other_seller.offerPrice) / 2
+            surplus = self.initial_price - self.averagePrice
+            self.surplus += surplus
+            other_seller.surplus += self.averagePrice - other_seller.cost
+            self.tempSurplus = surplus
+            other_seller.tempSurplus = self.averagePrice - other_seller.cost
+            self.pastTraders.append(other_seller)
+            other_seller.pastTraders.append(self)
+            self.update_offer_price(True, self.lowerBound)
+            other_seller.update_offer_price(True, other_seller.upperBound)
+            # Record the trade
+            self.model.trades_in_round.append({
+                'buyer_id': self.unique_id,
+                'seller_id': other_seller.unique_id,
+                'buyer_wtp': self.initial_price,
+                'seller_cost': other_seller.cost,
+                'average_price': self.averagePrice,
+                'surplus': surplus
+            })
+        else:
+            self.failures += 1
+            other_seller.failures += 1
+            self.update_offer_price(False, self.initial_price)
+            other_seller.update_offer_price(False, other_seller.cost)
+
+    def advance(self):
+        pass
+
+# MarketSeller class
+class MarketSeller(MarketAgent):
+    """A seller with a fixed price for a product"""
+
+    def __init__(self, unique_id, model):
+        super().__init__(unique_id, model)
+        lb = model.seller_lower_bound
+        ub = model.seller_upper_bound
+        self.cost = np.random.uniform(lb, ub)
+        self.surplus = 0
+        self.offerPrice = 0.5 * self.cost + 0.5 * ub
+        self.upperBound = ub
+        self.initial_price = self.cost
+
+    def step(self):
+        self.tempSurplus = 0
+        self.trade = False
+        other_buyer = self.select_partner(self.model.connectionListS, self.model.attractionList)
+        if other_buyer is None:
+            return  # No available partners
+        self.selected = other_buyer
+        self.NValLagged = self.NValue
+        self.NValue = self.model.pValue * (1 - self.model.kapValue) * self.NValLagged + 1
+
+        if other_buyer.selected is not None and not self.trade and not other_buyer.trade:
+            if other_buyer.selected.unique_id == self.unique_id:
+                self.attempt_trade(other_buyer)
+
+        if self.pastTraders:
+            self.update_attraction(other_buyer, self.tempSurplus)
+
+        self.round += 1
+        self.move += 1
+
+    def attempt_trade(self, other_buyer):
+        if other_buyer.offerPrice >= self.offerPrice or self.offerPrice - other_buyer.offerPrice < self.model.fixedCost:
+            self.successes += 1
+            self.indicator = 1
+            self.trade = True
+            other_buyer.trade = True
+            self.averagePrice = (other_buyer.offerPrice + self.offerPrice) / 2
+            surplus = self.averagePrice - self.cost
+            self.surplus += surplus
+            other_buyer.surplus += other_buyer.initial_price - self.averagePrice
+            self.tempSurplus = surplus
+            other_buyer.tempSurplus = other_buyer.initial_price - self.averagePrice
+            self.pastTraders.append(other_buyer)
+            other_buyer.pastTraders.append(self)
+            self.update_offer_price(True, self.upperBound)
+            other_buyer.update_offer_price(True, other_buyer.lowerBound)
+            # Record the trade
+            self.model.trades_in_round.append({
+                'buyer_id': other_buyer.unique_id,
+                'seller_id': self.unique_id,
+                'buyer_wtp': other_buyer.initial_price,
+                'seller_cost': self.cost,
+                'average_price': self.averagePrice,
+                'surplus': surplus
+            })
+        else:
+            self.failures += 1
+            other_buyer.failures += 1
+            self.update_offer_price(False, self.cost)
+            other_buyer.update_offer_price(False, other_buyer.initial_price)
+
+    def advance(self):
+        pass
+
+# Human Player class
+class HumanPlayer(MarketAgent):
+    """A human player acting as a buyer or seller"""
+
+    def __init__(self, unique_id, model, role, initial_value, offer_price, cost):
+        super().__init__(unique_id, model)
+        self.role = role  # 'buyer' or 'seller'
+        if self.role == 'buyer':
+            lb = model.buyer_lower_bound
+            ub = model.buyer_upper_bound
+            self.initial_price = float(initial_value)
+            self.surplus = 0
+            self.offerPrice = float(offer_price)
+            self.lowerBound = lb
+        else:
+            lb = model.seller_lower_bound
+            ub = model.seller_upper_bound
+            self.cost = float(cost)
+            self.surplus = 0
+            self.offerPrice = float(offer_price)
+            self.upperBound = ub
+            self.initial_price = self.cost
+        self.selected_partner_id = None
+        self.trade_result_message = ""
+        self.trade_history = {}
+
+    def step(self):
+        self.tempSurplus = 0
+        self.trade = False
+        self.trade_result_message = ""
+        if self.role == 'buyer':
+            # Use the selected partner
+            other_seller = next((agent for agent in self.model.schedule.agents if agent.unique_id == self.selected_partner_id), None)
+            if other_seller is None:
+                self.trade_result_message = "No partner selected or partner not found."
+                return  # No partner selected
+            self.selected = other_seller
+            self.NValLagged = self.NValue
+            self.NValue = self.model.pValue * (1 - self.model.kapValue) * self.NValLagged + 1
+
+            if other_seller.selected is not None and not self.trade and not other_seller.trade:
+                if other_seller.selected.unique_id == self.unique_id:
+                    self.attempt_trade(other_seller)
+            else:
+                self.trade_result_message = f"Trade failed with Seller {other_seller.unique_id}."
+
+            if self.pastTraders:
+                self.update_attraction(other_seller, self.tempSurplus)
+        else:
+            # Use the selected partner
+            other_buyer = next((agent for agent in self.model.schedule.agents if agent.unique_id == self.selected_partner_id), None)
+            if other_buyer is None:
+                self.trade_result_message = "No partner selected or partner not found."
+                return  # No partner selected
+            self.selected = other_buyer
+            self.NValLagged = self.NValLagged
+            self.NValue = self.model.pValue * (1 - self.model.kapValue) * self.NValLagged + 1
+
+            if other_buyer.selected is not None and not self.trade and not other_buyer.trade:
+                if other_buyer.selected.unique_id == self.unique_id:
+                    self.attempt_trade(other_buyer)
+            else:
+                self.trade_result_message = f"Trade failed with Buyer {other_buyer.unique_id}."
+
+            if self.pastTraders:
+                self.update_attraction(other_buyer, self.tempSurplus)
+
+        self.round += 1
+        self.move += 1
+
+    def attempt_trade(self, other_agent):
+        if self.role == 'buyer':
+            if self.offerPrice >= other_agent.offerPrice or other_agent.offerPrice - self.offerPrice < self.model.fixedCost:
+                self.successes += 1
+                self.indicator = 1
+                self.trade = True
+                other_agent.trade = True
+                self.averagePrice = (self.offerPrice + other_agent.offerPrice) / 2
+                surplus = self.initial_price - self.averagePrice
+                self.surplus += surplus
+                other_agent.surplus += self.averagePrice - other_agent.cost
+                self.tempSurplus = surplus
+                other_agent.tempSurplus = self.averagePrice - other_agent.cost
+                self.pastTraders.append(other_agent)
+                other_agent.pastTraders.append(self)
+                self.update_offer_price(True, self.lowerBound)
+                other_agent.update_offer_price(True, other_agent.upperBound)
+                # Record the trade
+                self.model.trades_in_round.append({
+                    'buyer_id': self.unique_id,
+                    'seller_id': other_agent.unique_id,
+                    'buyer_wtp': self.initial_price,
+                    'seller_cost': other_agent.cost,
+                    'average_price': self.averagePrice,
+                    'surplus': surplus
+                })
+                # Record in trade history
+                self.trade_history.setdefault(other_agent.unique_id, []).append({
+                    'round': self.model.roundnum,
+                    'agent_id': other_agent.unique_id,
+                    'price': self.averagePrice,
+                    'success': True
+                })
+                self.trade_result_message = f"Trade successful with Seller {other_agent.unique_id} at price {self.averagePrice:.2f}."
+            else:
+                self.failures += 1
+                other_agent.failures += 1
+                self.update_offer_price(False, self.initial_price)
+                other_agent.update_offer_price(False, other_agent.cost)
+                # Record failed trade
+                self.trade_history.setdefault(other_agent.unique_id, []).append({
+                    'round': self.model.roundnum,
+                    'agent_id': other_agent.unique_id,
+                    'price': None,
+                    'success': False
+                })
+                self.trade_result_message = f"Trade failed with Seller {other_agent.unique_id}."
+        else:
+            if other_agent.offerPrice >= self.offerPrice or self.offerPrice - other_agent.offerPrice < self.model.fixedCost:
+                self.successes += 1
+                self.indicator = 1
+                self.trade = True
+                other_agent.trade = True
+                self.averagePrice = (other_agent.offerPrice + self.offerPrice) / 2
+                surplus = self.averagePrice - self.cost
+                self.surplus += surplus
+                other_agent.surplus += other_agent.initial_price - self.averagePrice
+                self.tempSurplus = surplus
+                other_agent.tempSurplus = other_agent.initial_price - self.averagePrice
+                self.pastTraders.append(other_agent)
+                other_agent.pastTraders.append(self)
+                self.update_offer_price(True, self.upperBound)
+                other_agent.update_offer_price(True, other_agent.lowerBound)
+                # Record the trade
+                self.model.trades_in_round.append({
+                    'buyer_id': other_agent.unique_id,
+                    'seller_id': self.unique_id,
+                    'buyer_wtp': other_agent.initial_price,
+                    'seller_cost': self.cost,
+                    'average_price': self.averagePrice,
+                    'surplus': surplus
+                })
+                # Record in trade history
+                self.trade_history.setdefault(other_agent.unique_id, []).append({
+                    'round': self.model.roundnum,
+                    'agent_id': other_agent.unique_id,
+                    'price': self.averagePrice,
+                    'success': True
+                })
+                self.trade_result_message = f"Trade successful with Buyer {other_agent.unique_id} at price {self.averagePrice:.2f}."
+            else:
+                self.failures += 1
+                other_agent.failures += 1
+                self.update_offer_price(False, self.cost)
+                other_agent.update_offer_price(False, other_agent.initial_price)
+                # Record failed trade
+                self.trade_history.setdefault(other_agent.unique_id, []).append({
+                    'round': self.model.roundnum,
+                    'agent_id': other_agent.unique_id,
+                    'price': None,
+                    'success': False
+                })
+                self.trade_result_message = f"Trade failed with Buyer {other_agent.unique_id}."
+
+    def advance(self):
+        pass
+
+# MarketModel class
+class MarketModelThree:
+    """A market model with buyers and sellers"""
+
+    def __init__(self, B, S, seed, params, human_players=0):
+        self.seed = seed
+        random.seed(seed)
+        np.random.seed(seed)
+        self.num_buyers = B
+        self.num_sellers = S
+        self.schedule = SimultaneousActivation(self)
+        # Parameters
+        self.lamValue = params.get('lambda', 0.1)
+        self.gammaValue = params.get('gamma', 0.05)
+        self.dValue = params.get('dValue', 0)
+        self.pValue = params.get('pValue', 1)
+        self.kapValue = params.get('kapValue', 1)
+        self.fixedCost = params.get('fixedCost', 0.4)
+        self.buyer_lower_bound = params.get('buyer_lower_bound', 5)
+        self.buyer_upper_bound = params.get('buyer_upper_bound', 10)
+        self.seller_lower_bound = params.get('seller_lower_bound', 0)
+        self.seller_upper_bound = params.get('seller_upper_bound', 15)
+        self.percentage_chance = 1
+        self.roundnum = 0
+        # Human player parameters
+        self.human_players = human_players
+        self.human_roles = params.get('human_roles', ['buyer'])
+        self.human_initial_values = params.get('human_initial_values', [7.5])
+        self.human_offer_prices = params.get('human_offer_prices', [6])
+        self.human_costs = params.get('human_costs', [7.5])
+        # Initialize variables
+        self.connectionListB = {}
+        self.connectionListS = {}
+        total_agents = B + S + human_players
+        self.attractionList = np.ones((total_agents * 2, total_agents * 2, 2003), dtype=np.float64)
+        # Create agents
+        agent_id = 0
+        self.buyerIndices = []
+        self.sellerIndices = []
+        for _ in range(B):
+            buyer = MarketBuyer(agent_id, self)
+            self.schedule.add(buyer)
+            self.buyerIndices.append(buyer)
+            self.connectionListB[buyer.unique_id] = []
+            agent_id += 1
+        for _ in range(S):
+            seller = MarketSeller(agent_id, self)
+            self.schedule.add(seller)
+            self.sellerIndices.append(seller)
+            self.connectionListS[seller.unique_id] = []
+            agent_id += 1
+        # Add human players if applicable
+        self.human_player_agents = []
+        for i in range(human_players):
+            role = self.human_roles[i % len(self.human_roles)]
+            initial_value = self.human_initial_values[i % len(self.human_initial_values)]
+            offer_price = self.human_offer_prices[i % len(self.human_offer_prices)]
+            cost = self.human_costs[i % len(self.human_costs)]
+            human_agent = HumanPlayer(agent_id, self, role, initial_value, offer_price, cost)
+            self.schedule.add(human_agent)
+            self.human_player_agents.append(human_agent)
+            if role == 'buyer':
+                self.buyerIndices.append(human_agent)
+                self.connectionListB[human_agent.unique_id] = []
+            else:
+                self.sellerIndices.append(human_agent)
+                self.connectionListS[human_agent.unique_id] = []
+            agent_id += 1
+        # Create connections
+        for buyer in self.buyerIndices:
+            self.connectionListB[buyer.unique_id] = [seller for seller in self.sellerIndices if random.random() < self.percentage_chance]
+        for seller in self.sellerIndices:
+            self.connectionListS[seller.unique_id] = [buyer for buyer in self.buyerIndices if random.random() < self.percentage_chance]
+        # Data collection
+        self.data = []
+        self.trades_in_round = []
+        self.surplus_per_round = []
+        self.optimal_surplus_per_round = []
+        self.avg_price_per_round = []
+        self.quantity_traded_per_round = []
+        self.price_dispersion = []
+        self.equilibrium_price = self.calculate_equilibrium_price()
+        self.running = True
+
+    def compute_surplus(self):
+        return sum(trade['surplus'] for trade in self.trades_in_round)
+
+    def compute_trades(self):
+        return len(self.trades_in_round)
+
+    def calculate_optimal_surplus(self):
+        # Sort buyers by WTP descending
+        buyer_wtps = sorted([agent.initial_price for agent in self.buyerIndices], reverse=True)
+        # Sort sellers by cost ascending
+        seller_costs = sorted([agent.cost for agent in self.sellerIndices])
+        # Number of possible trades is the minimum of the number of buyers and sellers
+        num_possible_trades = min(len(buyer_wtps), len(seller_costs))
+        # Calculate surplus for each pair
+        surplus_list = []
+        for i in range(num_possible_trades):
+            surplus = buyer_wtps[i] - seller_costs[i]
+            if surplus > 0:
+                surplus_list.append(surplus)
+            else:
+                break  # No more positive surplus trades possible
+        # Sum the surplus values
+        optimal_surplus = sum(surplus_list)
+        return optimal_surplus
+
+    def calculate_equilibrium_price(self):
+        buyer_values = [agent.initial_price for agent in self.buyerIndices]
+        seller_costs = [agent.cost for agent in self.sellerIndices]
+        return (np.mean(buyer_values) + np.mean(seller_costs)) / 2
+
+    def collect_data(self):
+        surplus = self.compute_surplus()
+        trades = self.compute_trades()
+        if trades > 0:
+            avg_price = np.mean([trade['average_price'] for trade in self.trades_in_round])
+            self.avg_price_per_round.append(avg_price)
+        else:
+            self.avg_price_per_round.append(None)
+        prices = [agent.offerPrice for agent in self.schedule.agents if hasattr(agent, 'offerPrice')]
+        price_dispersion = np.std(prices) if prices else 0
+        # Calculate optimal surplus
+        optimal_surplus = self.calculate_optimal_surplus()
+        self.data.append({
+            'round': self.roundnum,
+            'surplus': surplus,
+            'optimal_surplus': optimal_surplus,
+            'trades': trades,
+            'avg_price': avg_price if trades > 0 else None,
+            'price_dispersion': price_dispersion
+        })
+        self.surplus_per_round.append(surplus)
+        self.optimal_surplus_per_round.append(optimal_surplus)
+        self.quantity_traded_per_round.append(trades)
+        self.price_dispersion.append(price_dispersion)
+
+    def step(self):
+        """Advance the model by one step."""
+        self.roundnum += 1
+        for agent in self.schedule.agents:
+            agent.selected = None
+        self.schedule.step()
+        print(f"Round number: {self.roundnum}")
+
+# GUI Application
+class MarketApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Market Model")
+        self.create_widgets()
+
+    def create_widgets(self):
+        self.entries = {}
+        params = [
+            ('Number of Buyers', 'num_buyers', 10),
+            ('Number of Sellers', 'num_sellers', 10),
+            ('Buyer Lower Bound', 'buyer_lower_bound', 5),
+            ('Buyer Upper Bound', 'buyer_upper_bound', 10),
+            ('Seller Lower Bound', 'seller_lower_bound', 0),
+            ('Seller Upper Bound', 'seller_upper_bound', 15),
+            ('Lambda Value', 'lambda', 0.1),
+            ('Gamma Value', 'gamma', 0.05),
+            ('d Value', 'dValue', 0),
+            ('p Value', 'pValue', 1),
+            ('Kappa Value', 'kapValue', 1),
+            ('Fixed Cost', 'fixedCost', 0.4),
+            ('Number of Steps', 'num_steps', 10),
+            ('Number of Human Players', 'human_players', 1),
+            ('Human Roles (comma-separated buyer/seller)', 'human_roles', 'buyer'),
+            ('Human Initial Values (comma-separated)', 'human_initial_values', '7.5'),
+            ('Human Offer Prices (comma-separated)', 'human_offer_prices', '6'),
+            ('Human Costs (comma-separated)', 'human_costs', '7.5')
+        ]
+        for idx, (label_text, var_name, default) in enumerate(params):
+            label = ttk.Label(self.root, text=label_text)
+            label.grid(row=idx, column=0, padx=5, pady=5, sticky='E')
+            entry = ttk.Entry(self.root)
+            entry.insert(0, str(default))
+            entry.grid(row=idx, column=1, padx=5, pady=5)
+            self.entries[var_name] = entry
+        run_button = ttk.Button(self.root, text="Run Model", command=self.run_model)
+        run_button.grid(row=len(params), column=0, columnspan=2, pady=10)
+        # Trade display panel
+        self.trade_display = tk.Text(self.root, width=50, height=20)
+        self.trade_display.grid(row=0, column=2, rowspan=len(params)+2, padx=10, pady=5)
+        self.trade_display.insert(tk.END, "Trade Log:\n")
+
+    def run_model(self):
+        params = {}
+        for var_name, entry in self.entries.items():
+            value = entry.get()
+            if var_name in ['human_roles', 'human_initial_values', 'human_offer_prices', 'human_costs']:
+                params[var_name] = [v.strip() for v in value.split(',')]
+            else:
+                params[var_name] = float(value) if '.' in value else int(value)
+        num_buyers = params.pop('num_buyers')
+        num_sellers = params.pop('num_sellers')
+        num_steps = params.pop('num_steps')
+        human_players = params.pop('human_players')
+        # Convert human roles to list
+        human_roles = params.get('human_roles', ['buyer'])
+        human_roles = [role.lower() for role in human_roles]
+        params['human_roles'] = human_roles
+        # Convert human initial values to float
+        human_initial_values = [float(v) for v in params.get('human_initial_values', [7.5])]
+        params['human_initial_values'] = human_initial_values
+        # Convert human offer prices to float
+        human_offer_prices = [float(v) for v in params.get('human_offer_prices', [6])]
+        params['human_offer_prices'] = human_offer_prices
+        # Convert human costs to float
+        human_costs = [float(v) for v in params.get('human_costs', [7.5])]
+        params['human_costs'] = human_costs
+
+        self.model = MarketModelThree(num_buyers, num_sellers, seed=42, params=params, human_players=human_players)
+        # Clear previous trade log
+        self.trade_display.delete('1.0', tk.END)
+        self.trade_display.insert(tk.END, "Trade Log:\n")
+        for step in range(num_steps):
+            self.trade_display.insert(tk.END, f"\n--- Round {step + 1} ---\n")
+            # Prompt each human player in order
+            for human_agent in self.model.human_player_agents:
+                if human_agent.round == step + 1:
+                    self.prompt_human_player(human_agent)
+            # Step the model
+            self.model.step()
+            # After stepping, display the trade results for human players
+            for human_agent in self.model.human_player_agents:
+                self.display_trade_result(human_agent)
+            # Display trades before they are cleared
+            for trade in self.model.trades_in_round:
+                trade_info = (f"Buyer {trade['buyer_id']} traded with Seller {trade['seller_id']}. "
+                              f"Buyer WTP: {trade['buyer_wtp']:.2f}, "
+                              f"Seller Cost: {trade['seller_cost']:.2f}, "
+                              f"Average Price: {trade['average_price']:.2f}, "
+                              f"Surplus: {trade['surplus']:.2f}\n")
+                self.trade_display.insert(tk.END, trade_info)
+            self.trade_display.see(tk.END)
+            self.root.update()
+            # Collect data after displaying
+            self.model.collect_data()
+            # Clear trades after collecting data
+            self.model.trades_in_round = []
+        # Plot the graphs
+        self.plot_graphs(self.model)
+
+    def prompt_human_player(self, human_agent):
+        # Create a new window for human interaction
+        human_window = tk.Toplevel(self.root)
+        human_window.title(f"Human Player Decision - Agent {human_agent.unique_id}")
+        tk.Label(human_window, text=f"Round {human_agent.model.roundnum}").pack()
+        tk.Label(human_window, text=f"You are a {human_agent.role.capitalize()} (Agent {human_agent.unique_id})").pack()
+        # Display available agents to trade with
+        if human_agent.role == 'buyer':
+            partners = human_agent.model.connectionListB[human_agent.unique_id]
+        else:
+            partners = human_agent.model.connectionListS[human_agent.unique_id]
+        partner_ids = [agent.unique_id for agent in partners]
+        tk.Label(human_window, text="Select a partner to trade with:").pack()
+        if not partner_ids:
+            tk.Label(human_window, text="No available partners to trade with.").pack()
+        else:
+            # Create a Listbox to display the partners
+            partner_listbox = tk.Listbox(human_window)
+            for pid in partner_ids:
+                partner_listbox.insert(tk.END, f"Agent {pid}")
+            partner_listbox.pack()
+        # Function to view past trades with selected agent
+        def view_past_trades():
+            selected_index = partner_listbox.curselection()
+            if not selected_index:
+                messagebox.showinfo("No Selection", "Please select an agent to view past trades.")
+                return
+            selected_agent_id = partner_ids[selected_index[0]]
+            trades = human_agent.trade_history.get(selected_agent_id, [])
+            if not trades:
+                messagebox.showinfo(f"No Trades with Agent {selected_agent_id}", "No past trades with this agent.")
+                return
+            trades_info = "\n".join([
+                f"Round {t['round']}: {'Success' if t['success'] else 'Failure'}"
+                f"{' at price ' + str(t['price']) if t['price'] else ''}"
+                for t in trades
+            ])
+            messagebox.showinfo(f"Trades with Agent {selected_agent_id}", trades_info)
+        # View Past Trades button
+        tk.Button(human_window, text="View Past Trades", command=view_past_trades).pack(pady=5)
+        # Entry for offer price
+        tk.Label(human_window, text="Enter your offer price:").pack()
+        offer_price_entry = tk.Entry(human_window)
+        offer_price_entry.insert(0, str(human_agent.offerPrice))
+        offer_price_entry.pack()
+        # Proceed button
+        def proceed():
+            try:
+                offer_price = float(offer_price_entry.get())
+                human_agent.offerPrice = offer_price
+                selected_index = partner_listbox.curselection()
+                if not selected_index:
+                    messagebox.showerror("No Partner Selected", "Please select a partner to trade with.")
+                    return
+                selected_id = partner_ids[selected_index[0]]
+                human_agent.selected_partner_id = selected_id
+                human_window.destroy()
+                # The model will be stepped in the main loop
+            except ValueError:
+                messagebox.showerror("Input Error", "Please enter a valid offer price.")
+        tk.Button(human_window, text="Proceed", command=proceed).pack()
+        self.root.wait_window(human_window)
+
+    def display_trade_result(self, human_agent):
+        result_window = tk.Toplevel(self.root)
+        result_window.title(f"Trade Result - Agent {human_agent.unique_id}")
+        tk.Label(result_window, text=human_agent.trade_result_message).pack(pady=10)
+        tk.Button(result_window, text="Next", command=result_window.destroy).pack(pady=5)
+        self.root.wait_window(result_window)
+
+    def plot_graphs(self, model):
+        # Create a new window for graphs
+        graph_window = tk.Toplevel(self.root)
+        graph_window.title("Graphs")
+        figure, axes = plt.subplots(3, 2, figsize=(16, 12), dpi=100)
+        canvas = FigureCanvasTkAgg(figure, graph_window)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
+        rounds = range(1, model.roundnum + 1)
+        figure.suptitle('Barry Market Simulation', fontsize=16)
+        # Surplus per round
+        ax1 = axes[0, 0]
+        ax1.plot(rounds, model.surplus_per_round, label='Actual Surplus', marker='o')
+        ax1.plot(rounds, model.optimal_surplus_per_round, label='Optimal Surplus', linestyle='--')
+        ax1.set_title('Surplus per Round')
+        ax1.set_xlabel('Round')
+        ax1.set_ylabel('Surplus')
+        ax1.legend()
+        # Adjust y-axis limits
+        max_surplus = max(max(model.surplus_per_round), max(model.optimal_surplus_per_round))
+        ax1.set_ylim(0, max_surplus * 1.1)
+        ax1.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # Average price per trade per round
+        ax2 = axes[0, 1]
+        # Filter out None values
+        valid_rounds = [i for i, price in zip(rounds, model.avg_price_per_round) if price is not None]
+        valid_prices = [price for price in model.avg_price_per_round if price is not None]
+        ax2.scatter(valid_rounds, valid_prices, color='green')
+        ax2.axhline(model.equilibrium_price, color='red', linestyle='--', label='Equilibrium Price')
+        ax2.set_title('Average Price per Trade per Round')
+        ax2.set_xlabel('Round')
+        ax2.set_ylabel('Average Price')
+        ax2.legend()
+        # Adjust y-axis limits
+        if valid_prices:
+            min_price = min(valid_prices + [model.equilibrium_price])
+            max_price = max(valid_prices + [model.equilibrium_price])
+            price_range = max_price - min_price
+            ax2.set_ylim(min_price - 0.1 * price_range, max_price + 0.1 * price_range)
+            ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # Supply & Demand Graph
+        ax3 = axes[1, 0]
+        buyer_values = sorted([agent.initial_price for agent in model.buyerIndices], reverse=True)
+        seller_costs = sorted([agent.cost for agent in model.sellerIndices])
+        quantity_b = range(len(buyer_values) + 1)
+        quantity_s = range(len(seller_costs) + 1)
+        # Extend buyer_values and seller_costs for step plot
+        buyer_values_extended = [buyer_values[0]] + buyer_values
+        seller_costs_extended = [seller_costs[0]] + seller_costs
+        # Step plot
+        ax3.step(quantity_b, buyer_values_extended, label='Demand', where='post', color='blue')
+        ax3.step(quantity_s, seller_costs_extended, label='Supply', where='post', color='orange')
+        # Equilibrium price line
+        ax3.axhline(model.equilibrium_price, color='red', linestyle='--', label='Equilibrium Price')
+        ax3.set_title('Supply & Demand')
+        ax3.set_xlabel('Quantity')
+        ax3.set_ylabel('Price')
+        ax3.legend()
+        ax3.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # Quantity traded per round
+        ax4 = axes[1, 1]
+        ax4.plot(rounds, model.quantity_traded_per_round, label='Quantity Traded', marker='o')
+        ax4.set_title('Quantity Traded per Round')
+        ax4.set_xlabel('Round')
+        ax4.set_ylabel('Quantity')
+        ax4.legend()
+        # Adjust y-axis limits
+        max_quantity = max(model.quantity_traded_per_round) if model.quantity_traded_per_round else 1
+        ax4.set_ylim(0, max_quantity * 1.1)
+        ax4.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # Price dispersion graph
+        ax5 = axes[2, 0]
+        ax5.plot(rounds, model.price_dispersion, marker='o')
+        ax5.set_title('Price Dispersion per Round')
+        ax5.set_xlabel('Round')
+        ax5.set_ylabel('Price Dispersion')
+        ax5.yaxis.set_major_locator(MaxNLocator(integer=True))
+        # Hide the unused subplot
+        axes[2, 1].axis('off')
+        canvas.draw()
+
+# Run the application
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = MarketApp(root)
+    root.mainloop()
