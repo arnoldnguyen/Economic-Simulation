@@ -9,11 +9,11 @@ NUM_COLS = 5
 WIDTH = 750
 HEIGHT = 750
 
-PORT = 9995
+PORT = 9924
 HOST = '127.0.0.1'
 
-def ui_grid(ui_element, pos, size = None, margin = None, area = (None)):
-    font = QFont("Arial", 12)
+def ui_grid(ui_element, pos, size = None, margin = None, area = (None), font_size = 12, allign = "l"):
+    font = QFont("Arial", font_size)
     ui_element.setFont(font)
     ui_element.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     ui_element.setStyleSheet("padding: 0px; margin: 0px;")
@@ -48,10 +48,9 @@ def ui_grid(ui_element, pos, size = None, margin = None, area = (None)):
 
         px_size = (area[0], area[1])
 
-    print("\nPos")
-    print(px_pos)
-    print("\nSize")
-    print(px_size)
+    if allign == "r":
+        px_pos = (px_pos[0] + dx - px_size[0],  px_pos[1] + dy - px_size[1])
+
 
     ui_element.setFixedSize(px_size[0], px_size[1])  # Width: 200, Height: 30
 
