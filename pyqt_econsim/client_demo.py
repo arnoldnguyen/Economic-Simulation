@@ -60,26 +60,32 @@ if __name__ == "__main__":
     window.setWindowTitle('Hello, PyQt!')
     window.setGeometry(100, 100, WIDTH, HEIGHT)
 
+
+    print("1")
     # CREATE A LABEL
     send_label = QLabel('Send to Server!', parent=window)
     send_label.setAlignment(Qt.AlignCenter)
-
     ui_grid(send_label, pos=(1, 0), size=(3, 0))
 
+
+    print("2")
     # CREATE A TEXTBOX
     textBox = textBox(window)
     ui_grid(textBox.textbox, pos=(1, 1), size=(3, 1), area=(150, 30))
     
+
+    print("3")
     # CREATE CLOSE CONNECTION BUTTON
     kill_sock_button = QPushButton("End Connection", parent=window)
     ui_grid(kill_sock_button, pos=(1, 2), size=(3, 1), area=(150, 30))
 
+    print("4")
     # CREATE A LABEL
     receive_label = QLabel("Message Log", parent=window)
     receive_label.setAlignment(Qt.AlignCenter)
-    ui_grid(receive_label, pos=(1, 3), size=(3, 1))
+    ui_grid(receive_label, pos=(1, 3), size=(3, 3))
 
-
+    print("5")
     scrollable_text = scrollableBox(window)
     ui_grid(scrollable_text.textEdit, pos=(1, 4), size=(3, 9))
 
