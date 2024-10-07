@@ -1,5 +1,5 @@
 import sys
-from PyQt5.QtWidgets import QApplication, QWidget, QLineEdit, QTextEdit
+from PyQt5.QtWidgets import QApplication, QWidget, QLineEdit, QTextEdit, QPushButton
 from PyQt5.QtCore import pyqtSignal
 
 class textBox(QWidget):
@@ -37,3 +37,9 @@ class scrollableBox(QWidget):
         self.textEdit.setText("")
         self.textEdit.setReadOnly(True)  # Set to read-only if you don't want editing
         self.textEdit.setParent(window)
+
+class pushButton(QWidget):
+    signal = pyqtSignal()
+    def __init__(self, name, window):
+        super().__init__()
+        self.button = QPushButton(name, parent=window)
