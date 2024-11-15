@@ -1,17 +1,18 @@
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QPushButton, QGridLayout, QSizePolicy, QTextEdit
 from PyQt5.QtGui import QFont
-
-from global_functions import *
+import sys
 
 NUM_ROWS = 15
 NUM_COLS = 5
 
-WIDTH = 750
+WIDTH = 950
+
 HEIGHT = 750
 
-PORT = 9986
+PORT = 9998
 SERVER_HOST = '127.0.0.1'
 CLIENT_HOST = "127.0.0.1"
+#CLIENT_HOST = "0.0.0.0"
 
 # THIS CODE, WHICH RUNS ON THE SERVER SIDE, OUTPUTS THE SERVER HOST NAME WHICH THE CLIENT CONENCTS TO IN CLIENT_HOST
 # print(socket.gethostbyname(socket.gethostname()))
