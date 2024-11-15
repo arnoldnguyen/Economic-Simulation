@@ -3,12 +3,14 @@ import sys
 import threading
 import queue
 
-from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QPushButton, QGridLayout, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QLabel, QWidget, QPushButton, QGridLayout, QSizePolicy, QListWidget
 from PyQt5.QtCore import pyqtSignal, Qt, QMetaObject, Q_ARG
 from PyQt5.QtGui import QFont
 
 from global_functions import *
-from basic_utils import textBox, scrollableBox, pushButton
+from basic_utils import textBox, scrollableBox, pushButton, timeSystem
+
+import random as rand
 
 hostname = socket.gethostname()  # Get the server's hostname
 server_ip = socket.gethostbyname(hostname)  # Get the IP address based on the hostname
@@ -20,12 +22,11 @@ print(f"Server IP Address: {server_ip}")
 client_queue = queue.Queue()
 queue_lock = threading.Lock()
 
-
 # HAHSMAP: CLIENT ADDRESS -> IF IT IS PAIRED, PARTNER ADDRESS ELSE NONE
 #pair_map = {}
 # _________________________________________________________________________________________________________________________
 
-# HAHSMAP: CLIENT ADDRESS -> CLIENT AGENT (DO AGENT.SOCKET TO SEND)
+# HAHSMAP: CLIENT ID -> CLIENT AGENT (DO AGENT.SOCKET TO SEND)
 client_map = {}
 
 # PUBLIC RESOURCE, NEED TO LOCK TO AVOID RACE CONDITIONS
@@ -34,6 +35,15 @@ client_map_lock = threading.Lock()
 # NO OTHER THREAD SHOULD TOUCH THIS VARIABLE OTHER THAN HANDLE SINGLE CLIENT
 unique_id_generator = 1
 id_gen_lock = threading.Lock()
+
+def handle_time_up():
+    print(f"Notify All Parties Time Is Up")
+    for k, v in client_map.items():
+        print(f"Notify {v.unique_id} about time end")
+        v.socket.send(f"TIME UP;".encode('utf-8'))
+        for mssg in v.batch:
+            v.socket.send(mssg.encode('utf-8'))
+        
 
 def find_agent(target_addr):
     for unique_id in client_map:
@@ -45,9 +55,11 @@ class Agent():
     def __init__(self, unique_id, socket, partner_addr, self_addr):
         self.unique_id = unique_id
         self.socket = socket
+        self.partners = []
         self.partner_id = partner_addr
         self.pursued = None
         self.addr = self_addr
+        self.batch = []
 
 def handle_single_client(client_socket, addr, handle_single_client_args):
     global unique_id_generator
@@ -62,6 +74,7 @@ def handle_single_client(client_socket, addr, handle_single_client_args):
             client_map[unique_id_generator] = Agent(unique_id_generator, client_socket, partner_addr=None, self_addr=addr)  # Add the client to the dictionary
             curr_agent = client_map[unique_id_generator]
             unique_id_generator += 1
+
     try:
         while True:
             message = client_socket.recv(1024).decode('utf-8')
@@ -79,8 +92,7 @@ def handle_single_client(client_socket, addr, handle_single_client_args):
                         
                         print(f"LOOK HERE CURR ID: {curr_agent.unique_id} CURR PURUED: {curr_agent.pursued}")
                         print(f"SENT: (SWITCH PARTNER:{curr_agent.unique_id};) TO {target_agent.unique_id}")
-
-                    
+                  
                     elif message[:len("Y:")] == "Y:":
                         switch_to_id = int(message.split(":")[1])
                         target_agent = client_map[switch_to_id]
@@ -133,18 +145,44 @@ def handle_single_client(client_socket, addr, handle_single_client_args):
 
                             print(f"THEY HAVE BEEN PAIRED UP")
 
+                elif message[:len("PROPOSE TRADE:")] == "PROPOSE TRADE:":
+                    print("handle PROPOSE TRADE")
+                    #print(f"trade id becomes = |{message.split(":")[1].split(";")[0]}|")
+                    if curr_agent.pursued != -1:
+                        print("you cannot approach more than one person")
+                    
+                    trade_id = int(message.split(":")[1])
+                    print(f"target {trade_id}")
+                    curr_agent.pursued = trade_id
+                    #client_map[trade_id].socket.send(f"INIT REQUEST:{curr_agent.unique_id},{offer_price};".encode('utf-8'))
+                    client_map[trade_id].batch.append(f"INIT REQUEST:{curr_agent.unique_id};")
+                    #client_map[trade_id].socket.send(f"{curr_agent.unique_id} would like to trade with you! Their offer price is ${offer_price}".encode('utf-8'))
+
+                elif message[:len("ACCEPT REQUEST FROM:")] == "ACCEPT REQUEST FROM:":
+                    print("handle client accepting")
+                    print(f"SPLIT: {message.split(':')[1]}")
+                    trade_id = int(message.split(":")[1])
+                    print(f"Pursued: {client_map[trade_id].pursued}, Curr ID: {curr_agent.unique_id}")
+                    if client_map[trade_id].pursued == curr_agent.unique_id:
+                        print(f"IDS match, time to pair")
+                        client_map[trade_id].partner_id = curr_agent.unique_id
+                        curr_agent.partner_id = client_map[trade_id].unique_id
+                        
+                        curr_agent.socket.send(f"PARTNER ID SET:{trade_id};".encode('utf-8'))
+                        client_map[trade_id].socket.send(f"PARTNER ID SET:{curr_agent.unique_id};".encode('utf-8'))
 
 
+                elif message[:len("MSSG:")] == "MSSG:":
+                    print("handle message broadcast")
+                    details = message.split(":")[1]
+                    trade_id = int(details.split(";")[0])
+                    mssg = details.split(";")[1]
+                    print(f"details {message}, t_id: {trade_id}, mssg:{mssg}")
+                    client_map[trade_id].socket.send(f"MSSG:{curr_agent.unique_id},{mssg};".encode('utf-8'))
 
-                # IF THE CLIENT IS NOT PAIRED, SEND MESSAGE TO SERVER
-                elif curr_agent.partner_id == None:
-
-                    print(f"Message from {addr} to Server: \n\"{message}\"")
-
-                # ELSE SEND MESSAGE TO PARTNER
+                    # PRINT AT SERVER END
                 else:
-                    print(f"Message from {addr}: {message} to {curr_agent.partner_id}")
-                    client_map[curr_agent.partner_id].socket.send(message.encode('utf-8'))
+                    print(f"Message from {addr} to Server: \n\"{message}\"")
 
             else:
                 print(f"{addr} disconnected.")
@@ -161,7 +199,7 @@ def handle_single_client(client_socket, addr, handle_single_client_args):
         
         print(f"Connection closed with {addr}")
 
-def server_thread(server_socket, q_signal, p_signal, handle_single_client_args):
+def server_thread(server_socket, q_signal, handle_single_client_args):
     while True:
         client_socket, addr = server_socket.accept()
         print(f"Connected to {client_socket} from {addr}")
@@ -182,15 +220,61 @@ def server_thread(server_socket, q_signal, p_signal, handle_single_client_args):
         
         q_signal.emit(queue_string)
 
-def start_match(q_signal, p_signal):
+def create_adj_list(q_dup, pair_box, time_system):
+    # CREATE PROBABILITIES
+    n = len(q_dup)
+
+    n_comb = (n * (n-1)) / 2
+    num_pairs = rand.randint(n, n_comb)
+
+    print(f"n: {n}")
+
+    for i in range(num_pairs):
+        ind_1 = rand.randint(1, n-1)
+        ind_2 = rand.randint(1, n-1)
+
+        print(f"ind 1: {ind_1}, ind_2: {ind_2}")
+
+        agent_1 = find_agent(q_dup[ind_1][1])
+        agent_2 = find_agent(q_dup[ind_2][1])
+
+        if agent_1.unique_id != agent_2.unique_id and agent_1.unique_id not in agent_2.partners and agent_2.unique_id not in agent_1.partners:
+            agent_1.partners.append(agent_2.unique_id)
+            agent_2.partners.append(agent_1.unique_id)
+
+
+    for k, v in client_map.items():
+        print(f"UNIQUE ID: {v.unique_id} PARTNERS: {v.partners}")        
+
+        player_list_str = "\n".join(map(str, v.partners))
+        
+        v.socket.send(f"Player List:{player_list_str};".encode('utf-8'))
+
+    time_system.timer.start()
+    time_system.label.setVisible(True)
+
+def start_match(q_signal, pair_box, time_system):
 
     print()
     print("yer")
     print()
 
+    q_dup = list(client_queue.queue)
+
+    pair_box.clear()
+    for i in q_dup:
+        pair_box.addItem(f"{find_agent(i[1]).unique_id}")
+
+
+    create_adj_list(q_dup, pair_box, time_system)
+
+    while not client_queue.empty():
+        client_queue.get()
+
     with queue_lock:
         # HERE THE PAIR MAP CODE IS MIXED WITH THE CLIENT MAP CODE. TRY TO FIX IT
         # If two clients are in the queue, pair them together
+        '''
         while client_queue.qsize() >= 2:
             client1, addr1 = client_queue.get()
             client2, addr2 = client_queue.get()
@@ -201,7 +285,7 @@ def start_match(q_signal, p_signal):
             agent1.partner_id = agent2.unique_id
             agent2.partner_id = agent1.unique_id
 
-            print(f"MAP: {client_map}")
+            #print(f"MAP: {client_map}")
 
             client1.send("You Are Connected To The Server;".encode('utf-8'))
             client1.send(f"Partner ID: {find_agent(addr2).unique_id};".encode('utf-8'))
@@ -210,6 +294,7 @@ def start_match(q_signal, p_signal):
             client2.send(f"Partner ID: {find_agent(addr1).unique_id};".encode('utf-8'))
 
             p_signal.emit(f"{addr1[0]}, {addr1[1]} is connected to {addr2[0]}, {addr2[1]}")
+        '''
 
         queue_list = list(client_queue.queue)
         queue_string = ""
@@ -229,8 +314,11 @@ def start_match(q_signal, p_signal):
 
     for unique_id in client_map:
         socket = client_map[unique_id].socket
-        socket.send(f"Player List:{player_list_str};".encode('utf-8'))
-        #print(f"Key: {addr}, Val: {val}")
+        
+        # OLD PLAYER LIST
+        #socket.send(f"Player List:{player_list_str};".encode('utf-8'))
+        
+        #print(f"Key: {addr}, Val: {val}")    
 
 def start_server():
     
@@ -239,6 +327,10 @@ def start_server():
     window = QWidget()
     window.setWindowTitle('Hello, PyQt!')
     window.setGeometry(100, 100, WIDTH, HEIGHT)
+
+    time_system = timeSystem(window, 30)
+    time_system.time_up.connect(handle_time_up)
+    ui_grid(time_system.label, pos=(0, 5))
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     
@@ -264,13 +356,18 @@ def start_server():
     pair_label.setAlignment(Qt.AlignCenter)
     ui_grid(pair_label, pos=(2, 3), size=(3, 3))
 
-    pair_box = scrollableBox(window)
-    ui_grid(pair_box.textEdit, pos=(2, 4), size=(3, 9), margin=(10, 10))
-    pair_box.signal.connect(lambda text: pair_box.textEdit.append(text))
+    pair_box = QListWidget(window)
+    ui_grid(pair_box, pos=(2, 4), size=(2, 9), margin=(10, 10))
+    #pair_box.signal.connect(lambda text: pair_box.textEdit.append(text))
+    
+    pair_box_2 = scrollableBox(window)
+    ui_grid(pair_box_2.textEdit, pos=(3, 4), size=(3,9), margin=(10, 10))
+
+    pair_box.itemClicked.connect(lambda item: pair_box_2.textEdit.setText("\n".join(map(str, client_map[int(item.text())].partners))))
 
     start_match_button = pushButton("Start Match", window)
     ui_grid(start_match_button.button, pos=(0, 4), margin=(10, 10))
-    start_match_button.button.clicked.connect(lambda: start_match(queue_box.signal,pair_box.signal))
+    start_match_button.button.clicked.connect(lambda: start_match(queue_box.signal, pair_box, time_system))
 
     params = [
         ('Number of Buyers', 'num_buyers', 10),
@@ -312,8 +409,11 @@ def start_server():
     handle_single_client_args = [queue_box]
 
 
-    server_thread_handler = threading.Thread(target=server_thread, args=(server_socket, queue_box.signal, pair_box.signal, handle_single_client_args))
+    server_thread_handler = threading.Thread(target=server_thread, args=(server_socket, queue_box.signal, handle_single_client_args))
     server_thread_handler.start()
+
+    print(f"LOOK HEREEEE: {socket.gethostbyname(socket.gethostname())}")
+
 
     window.show()
     # Start the application's event loop
